@@ -2,6 +2,8 @@ package main
 
 import (
 	"log"
+	"net"
+	"time"
 	"net/http"
 	"net/http/httputil"
 
@@ -65,6 +67,39 @@ func IbHandler(w http.ResponseWriter, r *http.Request) {
 	reverseProxy.ServeHTTP(w, r)
 }
 
+
+func isAlive(url *url.URL) bool {
+	conn, err := net.DialTimeout("tcp", url.Host, time.Minute*1)
+	if err != nil {
+		log.Printf("Unreachable to %v, error:", url.Host, err.Error())
+		return false
+	}
+	defer conn.Close()
+	return true
+}
+
+func healthCheck() {
+	t := time.NewTicker(time.Minute * 1)
+	for {
+		select {
+		case <-t.C:
+			for _, backend := range cfg.Backends {
+				pingURL, err := url.Parse(backend.URL)
+				if err != nil {
+					log.Fatal(err.Error())
+				}
+				isAlive := isAlive(pingURL)
+				backend.SetDead(isAlive)
+				msg := "ok"
+				if !isAlive {
+					msg = "dead"
+				}
+				log.Printf("%v checked %v by healthcheck", backend.URL, msg)
+			}
+		}
+	}
+}
+
 var cfg Config
 
 func Serve() {
@@ -73,6 +108,8 @@ func Serve() {
 		log.Fatal(err.Error())
 	}
 	json.Unmarshal(data, &cfg)
+
+	go healthCheck()
 
 	s := http.Server{
 		Addr: ":" + cfg.Proxy.Port,
