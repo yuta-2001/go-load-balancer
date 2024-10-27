@@ -26,6 +26,19 @@ type Backend struct {
 	mu sync.RWMutex
 }
 
+func (backend *Backend) SetDead(b bool) {
+	backend.mu.Lock()
+	backend.IsDead = b
+	backend.mu.Unlock()
+}
+
+func (backend *Backend) GetIsDead() bool {
+	backend.mu.RLock()
+	isAlive := backend.IsDead
+	backend.mu.RUnlock()
+	return isAlive
+}
+
 var mu sync.Mutex
 var idx int = 0
 
@@ -33,7 +46,10 @@ func IbHandler(w http.ResponseWriter, r *http.Request) {
 	maxLen := len(cfg.Backends)
 
 	mu.Lock()
-	// currentBackend := cfg.Backends[idx%maxLen]
+	currentBackend := cfg.Backends[idx%maxLen]
+	if currentBackend.GetIsDead() {
+		idx++
+	}
 	targetUrl, err := url.Parse(cfg.Backends[idx%maxLen].URL)
 	if err != nil {
 		log.Fatal(err.Error())
@@ -41,6 +57,11 @@ func IbHandler(w http.ResponseWriter, r *http.Request) {
 	idx++
 	mu.Unlock()
 	reverseProxy := httputil.NewSingleHostReverseProxy(targetUrl)
+	reverseProxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, e error) {
+		log.Printf("%v is dead.", targetUrl)
+		currentBackend.SetDead(true)
+		IbHandler(w, r)
+	}
 	reverseProxy.ServeHTTP(w, r)
 }
 
